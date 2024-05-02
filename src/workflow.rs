@@ -1,50 +1,36 @@
-use std::sync::{mpsc::{channel, Receiver, Sender}, Arc, Mutex};
+use std::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::{
-    handler::Handler,
-    rpar::{RPar, RParTemplate, Task},
-};
+use crate::{node::Node, rpar::RPar, threadpool::ThreadPool};
 
 pub struct Workflow<TInput: Send, TOutput: Send> {
     terminated: bool,
-    handler: Handler<TInput>,
-    collect_receiver: Receiver<TOutput>,
+    sender: Sender<TInput>,
+    res_receiver: Receiver<TOutput>,
+    thread_pool: ThreadPool,
 }
 
-impl<TInput: 'static + Send, TOutput: 'static + Send> Workflow<TInput, TOutput> {
-    fn new<TRPar: 'static + Send + RPar<TInput>, F: FnOnce(Handler<TOutput>) -> TRPar>(
-        rpar_template: RParTemplate<TInput, TOutput, TRPar>,
+impl<TInput: Send, TOutput: Send> Workflow<TInput, TOutput> {
+    fn new<TRPar: RPar<TInput, TOutput>>(
+        rpar: TRPar,
+        max_parallel: usize,
     ) -> Workflow<TInput, TOutput> {
-        let (sender, collect_receiver) = channel();
-        let collector = Handler::new(Collector{ sender });
-        let handler = rpar_template.apply(Arc::new(Mutex::new(collector)));
+        let (res_sender, res_receiver) = channel();
+        let (nodes, sender) = rpar.create_nodes(res_sender);
+        let thread_pool = ThreadPool::start(nodes, max_parallel);
         Workflow {
             terminated: false,
-            handler: Handler::new(handler),
-            collect_receiver
+            sender,
+            res_receiver,
+            thread_pool,
         }
     }
 
-    fn send(&mut self, val: TInput) -> Result<(), ()> {
-        self.handler.send(Task::Value(val))
+    fn send(&self, val: TInput) -> Result<(), ()> {
+        self.sender.send(val).map_err(|_| ())
     }
 
     fn end_and_collect(&mut self) -> Vec<TOutput> {
         self.terminated = true;
-        self.handler.send(Task::Stop);
-        self.collect_receiver.iter().collect()
-    }
-}
-
-struct Collector<TInput: Send> {
-    sender: Sender<TInput>,
-}
-
-impl<TInput: Send> RPar<TInput> for Collector<TInput> {
-    fn process(&mut self, task: Task<TInput>) -> Result<(), ()> {
-        match task {
-            Task::Value(val) => self.sender.send(val).map_err(|_| ()),
-            Task::Stop => Ok(()),
-        }
+        self.res_receiver.iter().collect()
     }
 }

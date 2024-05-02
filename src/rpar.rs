@@ -1,29 +1,9 @@
-use std::{marker::PhantomData, sync::{Arc, Mutex}};
+use std::sync::mpsc::Sender;
 
-use crate::handler::Handler;
+use crate::node::Node;
 
-pub struct RParTemplate<TInput: Send, TOutput: Send, TRPar: RPar<TInput>> {
-   pub f: Arc<Box<dyn Fn(Arc<Mutex<Handler<TOutput>>>) -> TRPar>>,
-   pub _marker: PhantomData<TInput>
-}
-
-impl<TInput: Send, TOutput: Send, TRPar: RPar<TInput>> Clone for RParTemplate<TInput, TOutput, TRPar> {
-   fn clone(&self) -> Self {
-      Self {
-         f: self.f.clone(),
-         _marker: self._marker.clone()
-      }
-   }
-}
-
-impl<TInput: Send, TOutput: Send, TRPar: RPar<TInput>> RParTemplate<TInput, TOutput, TRPar> {
-   pub fn apply(&self, next: Arc<Mutex<Handler<TOutput>>>) -> TRPar {
-      (*self.f)(next)
-   }
-}
-
-pub trait RPar<TInput: Send> {
-   fn process(&mut self, task: Task<TInput>) -> Result<(), ()>;
+pub trait RPar<TInput: Send, TOutput: Send> {
+    fn create_nodes(self, next_sender: Sender<TOutput>) -> (Vec<Box<dyn Node>>, Sender<TInput>);
 }
 
 pub enum Task<T: Send> {
