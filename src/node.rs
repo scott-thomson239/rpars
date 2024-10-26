@@ -1,6 +1,8 @@
+#[derive(Debug, PartialEq)]
 pub enum TryProcessError {
     NodeCancelled,
     ProcessError,
+    Empty,
 }
 
 pub trait Node: Send {

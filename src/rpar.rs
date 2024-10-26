@@ -9,6 +9,7 @@ pub trait RPar<TInput: Send, TOutput: Send> {
     ) -> (Vec<Box<dyn Node>>, Sender<Task<TInput>>);
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum Task<T: Send> {
     Value(T),
     Stop,
