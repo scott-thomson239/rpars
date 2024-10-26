@@ -1,50 +1,54 @@
 use crate::node::Node;
-use std::thread::{self, Thread};
+use itertools::Itertools;
+use std::thread;
+use std::thread::Result;
+
+pub enum WaitError {
+    JoinError,
+}
 
 pub struct ThreadPool {
-    nodes: Vec<Box<dyn Node>>,
     workers: Vec<Worker>,
-    threads: Vec<Thread>,
 }
 
 impl ThreadPool {
     pub fn start(nodes: Vec<Box<dyn Node>>, max_workers: usize) -> ThreadPool {
-        todo!()
+        let node_chunk_size = nodes.len() / max_workers;
+        let workers = nodes
+            .into_iter()
+            .chunks(node_chunk_size)
+            .into_iter()
+            .map(|node_chunk| Worker::new(node_chunk.collect_vec()))
+            .collect();
+        ThreadPool { workers }
     }
 
-    pub fn cancel() -> Result<(), ()> {
+    pub fn wait_all(self) -> Result<()> {
+        self.workers.into_iter().try_for_each(|a| a.wait())?;
         Ok(())
     }
 }
 
-#[derive(Clone)]
 struct Worker {
-    cancelled: bool,
+    thread: thread::JoinHandle<()>,
 }
 
 impl Worker {
-    fn new() -> Worker {
-        Worker { cancelled: false }
+    fn new(mut nodes: Vec<Box<dyn Node>>) -> Worker {
+        let thread = thread::spawn(move || {
+            for idx in (0..nodes.len()).cycle() {
+                let node = &mut nodes[idx];
+                let res = node.try_process_next();
+                if res.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Worker { thread }
     }
 
-    fn run_until_cancelled(&mut self, nodes: &mut Vec<Box<dyn Node>>) -> Result<(), ()> {
-        for idx in (0..nodes.len()).cycle() {
-            let node = &mut nodes[idx];
-            node.try_process_next()?; // TODO: block on first receiver instead of busy wait if it wont cause deadlocks
-            if self.cancelled {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    fn cancel(&mut self) -> bool {
-        match self.cancelled {
-            true => false,
-            false => {
-                self.cancelled = true;
-                true
-            }
-        }
+    fn wait(self) -> Result<()> {
+        self.thread.join()
     }
 }

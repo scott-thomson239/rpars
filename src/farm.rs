@@ -3,7 +3,10 @@ use std::{
     sync::mpsc::{channel, Receiver, Sender},
 };
 
-use crate::{node::Node, rpar::RPar};
+use crate::{
+    node::{Node, TryProcessError},
+    rpar::{RPar, Task},
+};
 
 pub struct Farm<TInput: Send + 'static, TOutput: Send + 'static, TRPar: RPar<TInput, TOutput>> {
     replicas: usize,
@@ -14,7 +17,10 @@ pub struct Farm<TInput: Send + 'static, TOutput: Send + 'static, TRPar: RPar<TIn
 impl<TInput: Send + 'static, TOutput: Send + 'static, TRPar: RPar<TInput, TOutput> + Clone>
     RPar<TInput, TOutput> for Farm<TInput, TOutput, TRPar>
 {
-    fn create_nodes(self, next_sender: Sender<TOutput>) -> (Vec<Box<dyn Node>>, Sender<TInput>) {
+    fn create_nodes(
+        self,
+        next_sender: Sender<Task<TOutput>>,
+    ) -> (Vec<Box<dyn Node>>, Sender<Task<TInput>>) {
         let (emitter_sender, emitter_receiver) = channel();
         let mut replicas = vec![];
         replicas.resize(self.replicas, self.rpar);
@@ -27,6 +33,7 @@ impl<TInput: Send + 'static, TOutput: Send + 'static, TRPar: RPar<TInput, TOutpu
             receiver: emitter_receiver,
             cur_index: 0,
             replica_senders,
+            cancelled: false,
         });
         all_nodes.push(emitter_node);
         (all_nodes, emitter_sender)
@@ -34,17 +41,21 @@ impl<TInput: Send + 'static, TOutput: Send + 'static, TRPar: RPar<TInput, TOutpu
 }
 
 pub struct FarmEmitterNode<TInput: Send> {
-    receiver: Receiver<TInput>,
+    receiver: Receiver<Task<TInput>>,
     cur_index: usize,
-    replica_senders: Vec<Sender<TInput>>,
+    replica_senders: Vec<Sender<Task<TInput>>>,
+    cancelled: bool,
 }
 
 impl<TInput: Send> Node for FarmEmitterNode<TInput> {
-    fn try_process_next(&mut self) -> Result<(), ()> {
-        let next = self.receiver.try_recv().map_err(|_| ())?;
+    fn try_process_next(&mut self) -> Result<(), TryProcessError> {
+        let next = self
+            .receiver
+            .try_recv()
+            .map_err(|_| TryProcessError::ProcessError)?;
         self.replica_senders[self.cur_index]
             .send(next)
-            .map_err(|_| ())?;
+            .map_err(|_| TryProcessError::ProcessError)?;
         self.cur_index = (self.cur_index + 1) % self.replica_senders.len();
         Ok(())
     }

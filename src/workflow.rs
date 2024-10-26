@@ -1,11 +1,14 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::{node::Node, rpar::RPar, threadpool::ThreadPool};
+use crate::{
+    node::Node,
+    rpar::{RPar, Task},
+    threadpool::ThreadPool,
+};
 
 pub struct Workflow<TInput: Send, TOutput: Send> {
-    terminated: bool,
-    sender: Sender<TInput>,
-    res_receiver: Receiver<TOutput>,
+    sender: Sender<Task<TInput>>,
+    res_receiver: Receiver<Task<TOutput>>,
     thread_pool: ThreadPool,
 }
 
@@ -18,7 +21,6 @@ impl<TInput: Send, TOutput: Send> Workflow<TInput, TOutput> {
         let (nodes, sender) = rpar.create_nodes(res_sender);
         let thread_pool = ThreadPool::start(nodes, max_parallel);
         Workflow {
-            terminated: false,
             sender,
             res_receiver,
             thread_pool,
@@ -26,11 +28,19 @@ impl<TInput: Send, TOutput: Send> Workflow<TInput, TOutput> {
     }
 
     fn send(&self, val: TInput) -> Result<(), ()> {
-        self.sender.send(val).map_err(|_| ())
+        self.sender.send(Task::Value(val)).map_err(|_| ())
     }
 
-    fn end_and_collect(&mut self) -> Vec<TOutput> {
-        self.terminated = true;
-        self.res_receiver.iter().collect()
+    fn end_and_collect(self) -> Result<Vec<TOutput>, ()> {
+        self.sender.send(Task::Stop).map_err(|_| ())?;
+        self.thread_pool.wait_all().map_err(|_| ())?;
+        Ok(self
+            .res_receiver
+            .iter()
+            .filter_map(|task| match task {
+                Task::Value(v) => Some(v),
+                Task::Stop => None,
+            })
+            .collect())
     }
 }
